@@ -67,17 +67,45 @@ namespace Webb
         private void SubscribeToRaceEvents()
         {
             eventManager.RaceManager.OnLapDetected += OnLapDetected;
+            eventManager.RaceManager.OnLapDisqualified += OnLapDisqualified;
+            eventManager.RaceManager.OnLapsRecalculated += OnLapsRecalculated;
+            eventManager.RaceManager.OnRacePreStart += OnRacePreStart;
             eventManager.RaceManager.OnRaceStart += OnRaceStart;
+            eventManager.RaceManager.OnRaceStartScheduled += OnRaceStartScheduled;
+            eventManager.RaceManager.OnRacePilotsSet += OnRacePilotsSet;
             eventManager.RaceManager.OnRaceEnd += OnRaceEnd;
             eventManager.RaceManager.OnRaceChanged += OnRaceChanged;
+            eventManager.RaceManager.OnRaceTimeRemaining += OnRaceTimeRemaining;
+            eventManager.RaceManager.OnRaceTimesUp += OnRaceTimesUp;
+            eventManager.RaceManager.OnRaceReset += OnRaceReset;
+            eventManager.RaceManager.OnRaceCancelled += OnRaceCancelled;
+            eventManager.RaceManager.OnSplitDetection += OnSplitDetection;
+            eventManager.RaceManager.OnChannelCrashedOut += OnChannelCrashedOut;
+            eventManager.RaceManager.OnChannelRecovered += OnChannelRecovered;
+            eventManager.RaceManager.OnPilotAdded += OnPilotAdded;
+            eventManager.RaceManager.OnPilotRemoved += OnPilotRemoved;
         }
 
         private void UnsubscribeFromRaceEvents()
         {
             eventManager.RaceManager.OnLapDetected -= OnLapDetected;
+            eventManager.RaceManager.OnLapDisqualified -= OnLapDisqualified;
+            eventManager.RaceManager.OnLapsRecalculated -= OnLapsRecalculated;
+            eventManager.RaceManager.OnRacePreStart -= OnRacePreStart;
             eventManager.RaceManager.OnRaceStart -= OnRaceStart;
+            eventManager.RaceManager.OnRaceStartScheduled -= OnRaceStartScheduled;
+            eventManager.RaceManager.OnRacePilotsSet -= OnRacePilotsSet;
             eventManager.RaceManager.OnRaceEnd -= OnRaceEnd;
             eventManager.RaceManager.OnRaceChanged -= OnRaceChanged;
+            eventManager.RaceManager.OnRaceTimeRemaining -= OnRaceTimeRemaining;
+            eventManager.RaceManager.OnRaceTimesUp -= OnRaceTimesUp;
+            eventManager.RaceManager.OnRaceReset -= OnRaceReset;
+            eventManager.RaceManager.OnRaceCancelled -= OnRaceCancelled;
+            eventManager.RaceManager.OnSplitDetection -= OnSplitDetection;
+            eventManager.RaceManager.OnChannelCrashedOut -= OnChannelCrashedOut;
+            eventManager.RaceManager.OnChannelRecovered -= OnChannelRecovered;
+            eventManager.RaceManager.OnPilotAdded -= OnPilotAdded;
+            eventManager.RaceManager.OnPilotRemoved -= OnPilotRemoved;
         }
 
         private void OnLapDetected(Lap lap)
@@ -95,6 +123,40 @@ namespace Webb
             });
         }
 
+        private void OnLapDisqualified(Lap lap)
+        {
+            sseManager.Broadcast("lap_disqualified", new
+            {
+                raceId = lap.Race?.ID,
+                raceNumber = lap.Race?.RaceNumber,
+                pilotId = lap.Pilot?.ID,
+                pilotName = lap.Pilot?.Name,
+                lapNumber = lap.Number,
+                lapLengthMs = (long)lap.Length.TotalMilliseconds,
+                endTime = lap.End
+            });
+        }
+
+        private void OnLapsRecalculated(Race race)
+        {
+            sseManager.Broadcast("laps_recalculated", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber
+            });
+        }
+
+        private void OnRacePreStart(Race race)
+        {
+            sseManager.Broadcast("race_pre_start", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber
+            });
+        }
+
         private void OnRaceStart(Race race)
         {
             sseManager.Broadcast("race_start", new
@@ -103,6 +165,36 @@ namespace Webb
                 raceNumber = race.RaceNumber,
                 roundNumber = race.RoundNumber,
                 startTime = race.Start
+            });
+        }
+
+        private void OnRaceStartScheduled(Race race, DateTime scheduledTime)
+        {
+            sseManager.Broadcast("race_start_scheduled", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber,
+                scheduledTime
+            });
+        }
+
+        private void OnRacePilotsSet(Race race)
+        {
+            sseManager.Broadcast("race_pilots_set", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber,
+                pilots = race.PilotChannelsSafe.Select(pc => new
+                {
+                    pilotId = pc.Pilot?.ID,
+                    pilotName = pc.Pilot?.Name,
+                    channelId = pc.Channel?.ID,
+                    channelNumber = pc.Channel?.Number,
+                    band = pc.Channel?.Band.ToString(),
+                    frequency = pc.Channel?.Frequency
+                }).ToArray()
             });
         }
 
@@ -124,6 +216,110 @@ namespace Webb
                 raceId = race.ID,
                 raceNumber = race.RaceNumber,
                 roundNumber = race.RoundNumber
+            });
+        }
+
+        private void OnRaceTimeRemaining(Race race, TimeSpan remaining)
+        {
+            sseManager.Broadcast("race_time_remaining", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                remainingMs = (long)remaining.TotalMilliseconds
+            });
+        }
+
+        private void OnRaceTimesUp(Race race)
+        {
+            sseManager.Broadcast("race_times_up", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber
+            });
+        }
+
+        private void OnRaceReset(Race race)
+        {
+            sseManager.Broadcast("race_reset", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber
+            });
+        }
+
+        private void OnRaceCancelled(Race race, bool wasFullCancel)
+        {
+            sseManager.Broadcast("race_cancelled", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber,
+                wasFullCancel
+            });
+        }
+
+        private void OnSplitDetection(Detection detection)
+        {
+            sseManager.Broadcast("split_detection", new
+            {
+                pilotId = detection.Pilot?.ID,
+                pilotName = detection.Pilot?.Name,
+                channelId = detection.Channel?.ID,
+                channelNumber = detection.Channel?.Number,
+                sectorNumber = detection.SectorNumber,
+                time = detection.Time,
+                valid = detection.Valid
+            });
+        }
+
+        private void OnChannelCrashedOut(Channel channel, Pilot pilot, bool isOut)
+        {
+            sseManager.Broadcast("channel_crashed_out", new
+            {
+                pilotId = pilot?.ID,
+                pilotName = pilot?.Name,
+                channelId = channel?.ID,
+                channelNumber = channel?.Number,
+                isOut
+            });
+        }
+
+        private void OnChannelRecovered(Channel channel, Pilot pilot)
+        {
+            sseManager.Broadcast("channel_recovered", new
+            {
+                pilotId = pilot?.ID,
+                pilotName = pilot?.Name,
+                channelId = channel?.ID,
+                channelNumber = channel?.Number
+            });
+        }
+
+        private void OnPilotAdded(PilotChannel pilotChannel)
+        {
+            sseManager.Broadcast("pilot_added", new
+            {
+                pilotId = pilotChannel.Pilot?.ID,
+                pilotName = pilotChannel.Pilot?.Name,
+                channelId = pilotChannel.Channel?.ID,
+                channelNumber = pilotChannel.Channel?.Number,
+                band = pilotChannel.Channel?.Band.ToString(),
+                frequency = pilotChannel.Channel?.Frequency
+            });
+        }
+
+        private void OnPilotRemoved(PilotChannel pilotChannel)
+        {
+            sseManager.Broadcast("pilot_removed", new
+            {
+                pilotId = pilotChannel.Pilot?.ID,
+                pilotName = pilotChannel.Pilot?.Name,
+                channelId = pilotChannel.Channel?.ID,
+                channelNumber = pilotChannel.Channel?.Number,
+                band = pilotChannel.Channel?.Band.ToString(),
+                frequency = pilotChannel.Channel?.Frequency
             });
         }
 
