@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -10,22 +11,53 @@ using Tools;
 
 namespace Webb
 {
+    internal readonly struct SseEventFilter
+    {
+        public IReadOnlySet<string> Include { get; }
+        public IReadOnlySet<string> Exclude { get; }
+
+        public SseEventFilter(IReadOnlySet<string> include, IReadOnlySet<string> exclude)
+        {
+            Include = include;
+            Exclude = exclude;
+        }
+
+        public bool Wants(string eventType)
+        {
+            if (Exclude.Contains(eventType)) return false;
+            if (Include.Count == 0) return true;
+            return Include.Contains(eventType);
+        }
+
+        public string Description
+        {
+            get
+            {
+                if (Include.Count == 0 && Exclude.Count == 0)
+                    return "all events";
+
+                if (Include.Count > 0 && Exclude.Count == 0)
+                    return string.Join(", ", Include);
+
+                if (Include.Count == 0 && Exclude.Count > 0)
+                    return "all except " + string.Join(", ", Exclude);
+
+                return string.Join(", ", Include) + " except " + string.Join(", ", Exclude);
+            }
+        }
+    }
+
     internal class SseManager : IDisposable
     {
         private class SseClient
         {
             public StreamWriter Writer { get; }
-            public IReadOnlySet<string> EventFilter { get; }
+            public SseEventFilter EventFilter { get; }
 
-            public SseClient(StreamWriter writer, IReadOnlySet<string> eventFilter)
+            public SseClient(StreamWriter writer, SseEventFilter eventFilter)
             {
                 Writer = writer;
                 EventFilter = eventFilter;
-            }
-
-            public bool WantsEvent(string eventType)
-            {
-                return EventFilter.Count == 0 || EventFilter.Contains(eventType);
             }
         }
 
@@ -37,7 +69,7 @@ namespace Webb
             DateFormatString = "yyyy-MM-ddTHH:mm:ss.fffZ"
         };
 
-        public void HandleClient(HttpListenerContext context, IReadOnlySet<string> eventFilter)
+        public void HandleClient(HttpListenerContext context, SseEventFilter eventFilter)
         {
             var response = context.Response;
             response.ContentType = "text/event-stream";
@@ -48,9 +80,7 @@ namespace Webb
             var client = new SseClient(writer, eventFilter);
 
             clients[clientId] = client;
-
-            string filterDescription = eventFilter.Count == 0 ? "all events" : string.Join(", ", eventFilter);
-            Logger.HTTP.Log(this, "SSE client connected: " + clientId + " (" + filterDescription + ")");
+            Logger.HTTP.Log(this, "SSE client connected: " + clientId + " (" + eventFilter.Description + ")");
 
             try
             {
@@ -91,7 +121,7 @@ namespace Webb
 
             foreach (var (clientId, client) in clients)
             {
-                if (!client.WantsEvent(eventType))
+                if (!client.EventFilter.Wants(eventType))
                     continue;
 
                 try
