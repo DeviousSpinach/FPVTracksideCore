@@ -1,6 +1,7 @@
 using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Text;
@@ -11,7 +12,24 @@ namespace Webb
 {
     internal class SseManager : IDisposable
     {
-        private readonly ConcurrentDictionary<Guid, StreamWriter> clients = new();
+        private class SseClient
+        {
+            public StreamWriter Writer { get; }
+            public IReadOnlySet<string> EventFilter { get; }
+
+            public SseClient(StreamWriter writer, IReadOnlySet<string> eventFilter)
+            {
+                Writer = writer;
+                EventFilter = eventFilter;
+            }
+
+            public bool WantsEvent(string eventType)
+            {
+                return EventFilter.Count == 0 || EventFilter.Contains(eventType);
+            }
+        }
+
+        private readonly ConcurrentDictionary<Guid, SseClient> clients = new();
         private readonly CancellationTokenSource cts = new();
 
         private static readonly JsonSerializerSettings JsonSettings = new JsonSerializerSettings
@@ -19,7 +37,7 @@ namespace Webb
             DateFormatString = "yyyy-MM-ddTHH:mm:ss.fffZ"
         };
 
-        public void HandleClient(HttpListenerContext context)
+        public void HandleClient(HttpListenerContext context, IReadOnlySet<string> eventFilter)
         {
             var response = context.Response;
             response.ContentType = "text/event-stream";
@@ -27,9 +45,12 @@ namespace Webb
 
             var clientId = Guid.NewGuid();
             var writer = new StreamWriter(response.OutputStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 1024, leaveOpen: false);
+            var client = new SseClient(writer, eventFilter);
 
-            clients[clientId] = writer;
-            Logger.HTTP.Log(this, "SSE client connected: " + clientId);
+            clients[clientId] = client;
+
+            string filterDescription = eventFilter.Count == 0 ? "all events" : string.Join(", ", eventFilter);
+            Logger.HTTP.Log(this, "SSE client connected: " + clientId + " (" + filterDescription + ")");
 
             try
             {
@@ -68,14 +89,17 @@ namespace Webb
             string json = JsonConvert.SerializeObject(payload, JsonSettings);
             string message = "event: " + eventType + "\ndata: " + json + "\n\n";
 
-            foreach (var (clientId, writer) in clients)
+            foreach (var (clientId, client) in clients)
             {
+                if (!client.WantsEvent(eventType))
+                    continue;
+
                 try
                 {
-                    lock (writer)
+                    lock (client.Writer)
                     {
-                        writer.Write(message);
-                        writer.Flush();
+                        client.Writer.Write(message);
+                        client.Writer.Flush();
                     }
                 }
                 catch (Exception)

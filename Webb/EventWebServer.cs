@@ -407,7 +407,8 @@ namespace Webb
             if (path == "/sse")
             {
                 context.Response.AppendHeader("Access-Control-Allow-Origin", "*");
-                Task.Run(() => sseManager.HandleClient(context));
+                HashSet<string> eventFilter = ParseEventFilter(context.Request.Url.Query);
+                Task.Run(() => sseManager.HandleClient(context, eventFilter));
                 return;
             }
 
@@ -672,6 +673,23 @@ namespace Webb
 
             content += "</ul>";
             return content;
+        }
+
+        private static HashSet<string> ParseEventFilter(string query)
+        {
+            HashSet<string> filter = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string eventsParam = HttpUtility.ParseQueryString(query)["events"];
+            if (string.IsNullOrEmpty(eventsParam))
+                return filter;
+
+            foreach (string e in eventsParam.Split(','))
+            {
+                string trimmed = e.Trim();
+                if (!string.IsNullOrEmpty(trimmed))
+                    filter.Add(trimmed);
+            }
+
+            return filter;
         }
 
         public bool Stop()
