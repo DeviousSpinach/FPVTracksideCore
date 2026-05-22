@@ -14,6 +14,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Web;
 using Tools;
 
@@ -30,6 +31,7 @@ namespace Webb
         public bool Running => running;
 
         private HttpListener listener;
+        private SseManager sseManager;
 
         public string Url { get; private set; }
 
@@ -57,6 +59,72 @@ namespace Webb
             }
 
             ChannelColors = channelColors.ToArray();
+
+            sseManager = new SseManager();
+            SubscribeToRaceEvents();
+        }
+
+        private void SubscribeToRaceEvents()
+        {
+            eventManager.RaceManager.OnLapDetected += OnLapDetected;
+            eventManager.RaceManager.OnRaceStart += OnRaceStart;
+            eventManager.RaceManager.OnRaceEnd += OnRaceEnd;
+            eventManager.RaceManager.OnRaceChanged += OnRaceChanged;
+        }
+
+        private void UnsubscribeFromRaceEvents()
+        {
+            eventManager.RaceManager.OnLapDetected -= OnLapDetected;
+            eventManager.RaceManager.OnRaceStart -= OnRaceStart;
+            eventManager.RaceManager.OnRaceEnd -= OnRaceEnd;
+            eventManager.RaceManager.OnRaceChanged -= OnRaceChanged;
+        }
+
+        private void OnLapDetected(Lap lap)
+        {
+            sseManager.Broadcast("lap_detected", new
+            {
+                raceId = lap.Race?.ID,
+                raceNumber = lap.Race?.RaceNumber,
+                pilotId = lap.Pilot?.ID,
+                pilotName = lap.Pilot?.Name,
+                lapNumber = lap.Number,
+                lapLengthMs = (long)lap.Length.TotalMilliseconds,
+                valid = lap.Detection?.Valid ?? false,
+                endTime = lap.End
+            });
+        }
+
+        private void OnRaceStart(Race race)
+        {
+            sseManager.Broadcast("race_start", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber,
+                startTime = race.Start
+            });
+        }
+
+        private void OnRaceEnd(Race race)
+        {
+            sseManager.Broadcast("race_end", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber,
+                endTime = race.End
+            });
+        }
+
+        private void OnRaceChanged(Race race)
+        {
+            sseManager.Broadcast("race_changed", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber
+            });
         }
 
         public void Dispose() 
@@ -138,6 +206,15 @@ namespace Webb
 
         private void HandleRequest(HttpListenerContext context)
         {
+            string path = Uri.UnescapeDataString(context.Request.Url.AbsolutePath);
+
+            if (path == "/sse")
+            {
+                context.Response.AppendHeader("Access-Control-Allow-Origin", "*");
+                Task.Run(() => sseManager.HandleClient(context));
+                return;
+            }
+
             HttpListenerResponse response = context.Response;
 
             if (context.Request.HttpMethod == "OPTIONS")
@@ -403,6 +480,9 @@ namespace Webb
 
         public bool Stop()
         {
+            UnsubscribeFromRaceEvents();
+            sseManager?.Dispose();
+
             running = false;
             listener?.Abort();
             thread?.Join();
