@@ -45,12 +45,48 @@ namespace Webb.Tests
             var response = await client.GetAsync(env.Url, HttpCompletionOption.ResponseHeadersRead);
             using var reader = new StreamReader(await response.Content.ReadAsStreamAsync());
 
-            // The connected comment block is ": connected\n\n" — two readline calls
+            // The connected comment block is ": connected instance=<guid>\n\n"
             var commentLine = await ReadLineAsync(reader);
             var blankLine = await ReadLineAsync(reader);
 
-            Assert.Equal(": connected", commentLine);
+            Assert.StartsWith(": connected instance=", commentLine);
             Assert.Equal("", blankLine);
+        }
+
+        [Fact]
+        public async Task ConnectedClient_ConnectedCommentContainsConsistentInstanceId()
+        {
+            using var env = new SseTestEnvironment(maxClients: 2);
+            using var clientA = new HttpClient();
+            using var clientB = new HttpClient();
+
+            var responseA = await clientA.GetAsync(env.Url, HttpCompletionOption.ResponseHeadersRead);
+            var responseB = await clientB.GetAsync(env.Url, HttpCompletionOption.ResponseHeadersRead);
+
+            var lineA = await ReadLineAsync(new StreamReader(await responseA.Content.ReadAsStreamAsync()));
+            var lineB = await ReadLineAsync(new StreamReader(await responseB.Content.ReadAsStreamAsync()));
+
+            // Both clients connect to the same server instance — instance IDs must match
+            Assert.Equal(lineA, lineB);
+        }
+
+        [Fact]
+        public async Task Dispose_BroadcastsServerStoppingEvent()
+        {
+            using var env = new SseTestEnvironment();
+            using var client = new HttpClient();
+
+            var response = await client.GetAsync(env.Url, HttpCompletionOption.ResponseHeadersRead);
+            using var reader = new StreamReader(await response.Content.ReadAsStreamAsync());
+
+            await DrainUntilBlankLineAsync(reader);
+            await env.WaitForClientAsync();
+
+            // Dispose broadcasts server_stopping to all live clients before cancelling
+            env.SseManager.Dispose();
+
+            var message = await ReadSseMessageAsync(reader);
+            Assert.Contains("event: server_stopping", message);
         }
 
         [Fact]
@@ -284,6 +320,7 @@ namespace Webb.Tests
                 }
             }
             catch (OperationCanceledException) { }
+            catch (Exception) { /* stream closed by server (e.g. after server_stopping) */ }
             return lines;
         }
 

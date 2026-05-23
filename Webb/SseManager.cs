@@ -70,9 +70,14 @@ namespace Webb
         private readonly int maxBufferedEvents;
         private long nextEventId = 0;
 
+        // Unique per server process. Sent in the ": connected" comment so clients can detect restarts
+        // and request a full state snapshot rather than relying on the replay buffer from a prior session.
+        public string InstanceId { get; } = Guid.NewGuid().ToString();
+
         public SseManager(int replayBufferSize = 100)
         {
             maxBufferedEvents = replayBufferSize > 0 ? replayBufferSize : 100;
+            EphemeralEvents.Add("server_stopping"); // never meaningful to replay
         }
 
         // Events added here are delivered to live clients but never stored in the replay buffer.
@@ -104,7 +109,7 @@ namespace Webb
             {
                 lock (writer)
                 {
-                    writer.Write(": connected\n\n");
+                    writer.Write(": connected instance=" + InstanceId + "\n\n");
                     writer.Flush();
                 }
 
@@ -194,6 +199,7 @@ namespace Webb
 
         public void Dispose()
         {
+            Broadcast("server_stopping", new { reason = "shutdown" });
             cts.Cancel();
         }
     }

@@ -152,7 +152,16 @@ namespace Webb
             {
                 raceId = race.ID,
                 raceNumber = race.RaceNumber,
-                roundNumber = race.RoundNumber
+                roundNumber = race.RoundNumber,
+                laps = race.Laps.ToArray().Select(lap => new
+                {
+                    pilotId = lap.Pilot?.ID,
+                    pilotName = lap.Pilot?.Name,
+                    lapNumber = lap.Number,
+                    lapLengthMs = (long)lap.Length.TotalMilliseconds,
+                    valid = lap.Detection?.Valid ?? false,
+                    endTime = lap.End
+                }).ToArray()
             });
         }
 
@@ -421,6 +430,17 @@ namespace Webb
                 return;
             }
 
+            if (path == "/api/state")
+            {
+                context.Response.AppendHeader("Access-Control-Allow-Origin", "*");
+                context.Response.ContentType = "application/json";
+                byte[] snapshot = SerializeState();
+                context.Response.ContentLength64 = snapshot.Length;
+                context.Response.OutputStream.Write(snapshot, 0, snapshot.Length);
+                context.Response.OutputStream.Close();
+                return;
+            }
+
             HttpListenerResponse response = context.Response;
 
             if (context.Request.HttpMethod == "OPTIONS")
@@ -682,6 +702,78 @@ namespace Webb
 
             content += "</ul>";
             return content;
+        }
+
+        private static readonly JsonSerializerSettings StateJsonSettings = new JsonSerializerSettings
+        {
+            DateFormatString = "yyyy-MM-ddTHH:mm:ss.fffZ",
+            Formatting = Formatting.None
+        };
+
+        private byte[] SerializeState()
+        {
+            var ev = eventManager?.Event;
+            var raceManager = eventManager?.RaceManager;
+            var currentRace = raceManager?.CurrentRace;
+
+            var state = new
+            {
+                instanceId = sseManager.InstanceId,
+                @event = ev == null ? null : (object)new
+                {
+                    id = ev.ID,
+                    name = ev.Name,
+                    eventType = ev.EventType.ToString(),
+                    laps = ev.Laps,
+                    raceLengthMs = (long)ev.RaceLength.TotalMilliseconds,
+                    minLapTimeMs = (long)ev.MinLapTime.TotalMilliseconds
+                },
+                pilots = ev?.PilotChannels.Select(pc => new
+                {
+                    pilotId = pc.Pilot?.ID,
+                    pilotName = pc.Pilot?.Name,
+                    channelId = pc.Channel?.ID,
+                    channelNumber = pc.Channel?.Number,
+                    band = pc.Channel?.Band.ToString(),
+                    frequency = pc.Channel?.Frequency
+                }).ToArray() ?? Array.Empty<object>(),
+                rounds = eventManager?.RoundManager.Rounds?.Select(r => new
+                {
+                    id = r.ID,
+                    roundNumber = r.RoundNumber,
+                    eventType = r.EventType.ToString(),
+                    name = r.Name
+                }).ToArray() ?? Array.Empty<object>(),
+                currentRace = currentRace == null ? null : (object)new
+                {
+                    raceId = currentRace.ID,
+                    raceNumber = currentRace.RaceNumber,
+                    roundNumber = currentRace.RoundNumber,
+                    startTime = currentRace.Start,
+                    running = currentRace.Running,
+                    pilots = currentRace.PilotChannelsSafe.Select(pc => new
+                    {
+                        pilotId = pc.Pilot?.ID,
+                        pilotName = pc.Pilot?.Name,
+                        channelId = pc.Channel?.ID,
+                        channelNumber = pc.Channel?.Number,
+                        band = pc.Channel?.Band.ToString(),
+                        frequency = pc.Channel?.Frequency
+                    }).ToArray(),
+                    laps = currentRace.Laps.ToArray().Select(lap => new
+                    {
+                        pilotId = lap.Pilot?.ID,
+                        pilotName = lap.Pilot?.Name,
+                        lapNumber = lap.Number,
+                        lapLengthMs = (long)lap.Length.TotalMilliseconds,
+                        valid = lap.Detection?.Valid ?? false,
+                        endTime = lap.End
+                    }).ToArray()
+                }
+            };
+
+            string json = JsonConvert.SerializeObject(state, StateJsonSettings);
+            return Encoding.UTF8.GetBytes(json);
         }
 
         public bool Stop()
