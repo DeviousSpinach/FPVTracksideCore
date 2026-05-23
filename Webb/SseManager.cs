@@ -61,13 +61,31 @@ namespace Webb
             }
         }
 
+        private record BufferedEvent(long Id, string EventType, string DataJson);
+
         private readonly ConcurrentDictionary<Guid, SseClient> clients = new();
         private readonly CancellationTokenSource cts = new();
+        private readonly LinkedList<BufferedEvent> eventBuffer = new();
+        private readonly object eventBufferLock = new();
+        private readonly int maxBufferedEvents;
+        private long nextEventId = 0;
+
+        public SseManager(int replayBufferSize = 100)
+        {
+            maxBufferedEvents = replayBufferSize > 0 ? replayBufferSize : 100;
+        }
+
+        // Events added here are delivered to live clients but never stored in the replay buffer.
+        // Use for high-frequency events (e.g. race_time_remaining) whose past values are meaningless on reconnect.
+        public readonly HashSet<string> EphemeralEvents = new(StringComparer.OrdinalIgnoreCase);
 
         private static readonly JsonSerializerSettings JsonSettings = new JsonSerializerSettings
         {
             DateFormatString = "yyyy-MM-ddTHH:mm:ss.fffZ"
         };
+
+        private static string BuildMessage(long id, string eventType, string dataJson)
+            => "id: " + id + "\nevent: " + eventType + "\ndata: " + dataJson + "\n\n";
 
         public void HandleClient(HttpListenerContext context, SseEventFilter eventFilter)
         {
@@ -88,6 +106,29 @@ namespace Webb
                 {
                     writer.Write(": connected\n\n");
                     writer.Flush();
+                }
+
+                // Replay any events the client missed during a reconnect
+                string lastIdHeader = context.Request.Headers["Last-Event-ID"];
+                if (long.TryParse(lastIdHeader, out long lastId))
+                {
+                    List<BufferedEvent> missed;
+                    lock (eventBufferLock)
+                    {
+                        missed = eventBuffer
+                            .Where(e => e.Id > lastId && eventFilter.Wants(e.EventType))
+                            .ToList();
+                    }
+                    if (missed.Count > 0)
+                    {
+                        Logger.HTTP.Log(this, "SSE replaying " + missed.Count + " missed event(s) for client: " + clientId);
+                        lock (writer)
+                        {
+                            foreach (var evt in missed)
+                                writer.Write(BuildMessage(evt.Id, evt.EventType, evt.DataJson));
+                            writer.Flush();
+                        }
+                    }
                 }
 
                 while (!cts.IsCancellationRequested)
@@ -117,7 +158,19 @@ namespace Webb
         public void Broadcast(string eventType, object payload)
         {
             string json = JsonConvert.SerializeObject(payload, JsonSettings);
-            string message = "event: " + eventType + "\ndata: " + json + "\n\n";
+            long id = Interlocked.Increment(ref nextEventId);
+
+            if (!EphemeralEvents.Contains(eventType))
+            {
+                lock (eventBufferLock)
+                {
+                    eventBuffer.AddLast(new BufferedEvent(id, eventType, json));
+                    if (eventBuffer.Count > maxBufferedEvents)
+                        eventBuffer.RemoveFirst();
+                }
+            }
+
+            string message = BuildMessage(id, eventType, json);
 
             foreach (var (clientId, client) in clients)
             {

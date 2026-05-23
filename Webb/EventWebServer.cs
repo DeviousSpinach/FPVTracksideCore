@@ -66,7 +66,10 @@ namespace Webb
 
             ChannelColors = channelColors.ToArray();
 
-            sseManager = new SseManager();
+            SseSettings sseSettings = SseSettings.Load();
+            sseManager = new SseManager(sseSettings.ReplayBufferSize);
+            foreach (string eventType in sseSettings.EphemeralEvents)
+                sseManager.EphemeralEvents.Add(eventType);
             SubscribeToRaceEvents();
         }
 
@@ -413,7 +416,7 @@ namespace Webb
             if (path == "/sse")
             {
                 context.Response.AppendHeader("Access-Control-Allow-Origin", "*");
-                SseEventFilter eventFilter = ParseEventFilter(context.Request.Url.Query);
+                SseEventFilter eventFilter = SseQueryParser.Parse(context.Request.Url.Query);
                 Task.Run(() => sseManager.HandleClient(context, eventFilter));
                 return;
             }
@@ -679,30 +682,6 @@ namespace Webb
 
             content += "</ul>";
             return content;
-        }
-
-        private static SseEventFilter ParseEventFilter(string query)
-        {
-            HashSet<string> include = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            HashSet<string> exclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            string eventsParam = HttpUtility.ParseQueryString(query)["events"];
-            if (string.IsNullOrEmpty(eventsParam))
-                return new SseEventFilter(include, exclude);
-
-            foreach (string e in eventsParam.Split(','))
-            {
-                string trimmed = e.Trim();
-                if (string.IsNullOrEmpty(trimmed))
-                    continue;
-
-                if (trimmed.StartsWith("-"))
-                    exclude.Add(trimmed.Substring(1));
-                else
-                    include.Add(trimmed);
-            }
-
-            return new SseEventFilter(include, exclude);
         }
 
         public bool Stop()
