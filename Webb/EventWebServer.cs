@@ -93,6 +93,7 @@ namespace Webb
             eventManager.RaceManager.OnChannelRecovered += OnChannelRecovered;
             eventManager.RaceManager.OnPilotAdded += OnPilotAdded;
             eventManager.RaceManager.OnPilotRemoved += OnPilotRemoved;
+            eventManager.ResultManager.RaceResultsChanged += OnRaceResultsChanged;
         }
 
         private void UnsubscribeFromRaceEvents()
@@ -115,6 +116,7 @@ namespace Webb
             eventManager.RaceManager.OnChannelRecovered -= OnChannelRecovered;
             eventManager.RaceManager.OnPilotAdded -= OnPilotAdded;
             eventManager.RaceManager.OnPilotRemoved -= OnPilotRemoved;
+            eventManager.ResultManager.RaceResultsChanged -= OnRaceResultsChanged;
         }
 
         private void OnLapDetected(Lap lap)
@@ -341,6 +343,26 @@ namespace Webb
             });
         }
 
+        private void OnRaceResultsChanged(Race race)
+        {
+            sseManager.Broadcast("race_results", new
+            {
+                raceId = race.ID,
+                raceNumber = race.RaceNumber,
+                roundNumber = race.RoundNumber,
+                results = eventManager.ResultManager.GetOrderedResults(race).Select(r => new
+                {
+                    pilotId = r.Pilot?.ID,
+                    pilotName = r.Pilot?.Name,
+                    position = r.Position,
+                    points = r.Points,
+                    dnf = r.DNF,
+                    lapsFinished = r.LapsFinished,
+                    timeMs = (long)r.Time.TotalMilliseconds
+                }).ToArray()
+            });
+        }
+
         public void Dispose() 
         {
             Stop();
@@ -434,7 +456,8 @@ namespace Webb
             {
                 context.Response.AppendHeader("Access-Control-Allow-Origin", "*");
                 context.Response.ContentType = "application/json";
-                byte[] snapshot = SerializeState();
+                bool full = HttpUtility.ParseQueryString(context.Request.Url.Query)["full"] == "true";
+                byte[] snapshot = SerializeState(full);
                 context.Response.ContentLength64 = snapshot.Length;
                 context.Response.OutputStream.Write(snapshot, 0, snapshot.Length);
                 context.Response.OutputStream.Close();
@@ -710,7 +733,35 @@ namespace Webb
             Formatting = Formatting.None
         };
 
-        private byte[] SerializeState()
+        private static object SerializeRaceForState(Race race) => new
+        {
+            raceId = race.ID,
+            raceNumber = race.RaceNumber,
+            roundNumber = race.RoundNumber,
+            startTime = race.Start,
+            endTime = race.End,
+            running = race.Running,
+            pilots = race.PilotChannelsSafe.Select(pc => new
+            {
+                pilotId = pc.Pilot?.ID,
+                pilotName = pc.Pilot?.Name,
+                channelId = pc.Channel?.ID,
+                channelNumber = pc.Channel?.Number,
+                band = pc.Channel?.Band.ToString(),
+                frequency = pc.Channel?.Frequency
+            }).ToArray(),
+            laps = race.Laps.ToArray().Select(lap => new
+            {
+                pilotId = lap.Pilot?.ID,
+                pilotName = lap.Pilot?.Name,
+                lapNumber = lap.Number,
+                lapLengthMs = (long)lap.Length.TotalMilliseconds,
+                valid = lap.Detection?.Valid ?? false,
+                endTime = lap.End
+            }).ToArray()
+        };
+
+        private byte[] SerializeState(bool full = false)
         {
             var ev = eventManager?.Event;
             var raceManager = eventManager?.RaceManager;
@@ -732,6 +783,10 @@ namespace Webb
                 {
                     pilotId = pc.Pilot?.ID,
                     pilotName = pc.Pilot?.Name,
+                    firstName = pc.Pilot?.FirstName,
+                    lastName = pc.Pilot?.LastName,
+                    discordId = pc.Pilot?.DiscordID,
+                    photoPath = pc.Pilot?.PhotoPath,
                     channelId = pc.Channel?.ID,
                     channelNumber = pc.Channel?.Number,
                     band = pc.Channel?.Band.ToString(),
@@ -744,32 +799,10 @@ namespace Webb
                     eventType = r.EventType.ToString(),
                     name = r.Name
                 }).ToArray() ?? Array.Empty<object>(),
-                currentRace = currentRace == null ? null : (object)new
-                {
-                    raceId = currentRace.ID,
-                    raceNumber = currentRace.RaceNumber,
-                    roundNumber = currentRace.RoundNumber,
-                    startTime = currentRace.Start,
-                    running = currentRace.Running,
-                    pilots = currentRace.PilotChannelsSafe.Select(pc => new
-                    {
-                        pilotId = pc.Pilot?.ID,
-                        pilotName = pc.Pilot?.Name,
-                        channelId = pc.Channel?.ID,
-                        channelNumber = pc.Channel?.Number,
-                        band = pc.Channel?.Band.ToString(),
-                        frequency = pc.Channel?.Frequency
-                    }).ToArray(),
-                    laps = currentRace.Laps.ToArray().Select(lap => new
-                    {
-                        pilotId = lap.Pilot?.ID,
-                        pilotName = lap.Pilot?.Name,
-                        lapNumber = lap.Number,
-                        lapLengthMs = (long)lap.Length.TotalMilliseconds,
-                        valid = lap.Detection?.Valid ?? false,
-                        endTime = lap.End
-                    }).ToArray()
-                }
+                currentRace = currentRace == null ? null : SerializeRaceForState(currentRace),
+                allRaces = full
+                    ? (raceManager?.Races.Select(SerializeRaceForState).ToArray() ?? Array.Empty<object>())
+                    : null
             };
 
             string json = JsonConvert.SerializeObject(state, StateJsonSettings);
