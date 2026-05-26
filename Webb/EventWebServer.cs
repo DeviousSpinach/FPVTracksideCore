@@ -9,6 +9,7 @@ using Lap = RaceLib.Lap;
 using Pilot = RaceLib.Pilot;
 using PilotChannel = RaceLib.PilotChannel;
 using Race = RaceLib.Race;
+using Round = RaceLib.Round;
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
@@ -94,6 +95,10 @@ namespace Webb
             eventManager.RaceManager.OnPilotAdded += OnPilotAdded;
             eventManager.RaceManager.OnPilotRemoved += OnPilotRemoved;
             eventManager.ResultManager.RaceResultsChanged += OnRaceResultsChanged;
+            eventManager.OnEventChange += OnEventChanged;
+            eventManager.OnPilotRefresh += OnPilotsUpdated;
+            eventManager.RoundManager.OnRoundAdded += OnRoundAdded;
+            eventManager.RoundManager.OnRoundRemoved += OnRoundRemoved;
         }
 
         private void UnsubscribeFromRaceEvents()
@@ -117,6 +122,10 @@ namespace Webb
             eventManager.RaceManager.OnPilotAdded -= OnPilotAdded;
             eventManager.RaceManager.OnPilotRemoved -= OnPilotRemoved;
             eventManager.ResultManager.RaceResultsChanged -= OnRaceResultsChanged;
+            eventManager.OnEventChange -= OnEventChanged;
+            eventManager.OnPilotRefresh -= OnPilotsUpdated;
+            eventManager.RoundManager.OnRoundAdded -= OnRoundAdded;
+            eventManager.RoundManager.OnRoundRemoved -= OnRoundRemoved;
         }
 
         private void OnLapDetected(Lap lap)
@@ -363,7 +372,62 @@ namespace Webb
             });
         }
 
-        public void Dispose() 
+        private void OnEventChanged()
+        {
+            var ev = eventManager?.Event;
+            sseManager.Broadcast("event_changed", new
+            {
+                id = ev?.ID,
+                name = ev?.Name,
+                eventType = ev?.EventType.ToString(),
+                laps = ev?.Laps,
+                raceLengthMs = (long)(ev?.RaceLength.TotalMilliseconds ?? 0),
+                minLapTimeMs = (long)(ev?.MinLapTime.TotalMilliseconds ?? 0)
+            });
+        }
+
+        private void OnRoundAdded(Round round)
+        {
+            sseManager.Broadcast("round_created", new
+            {
+                id = round.ID,
+                roundNumber = round.RoundNumber,
+                eventType = round.EventType.ToString(),
+                name = round.Name
+            });
+        }
+
+        private void OnRoundRemoved(Round round)
+        {
+            sseManager.Broadcast("round_removed", new
+            {
+                id = round.ID,
+                roundNumber = round.RoundNumber
+            });
+        }
+
+        private void OnPilotsUpdated()
+        {
+            var ev = eventManager?.Event;
+            sseManager.Broadcast("pilots_updated", new
+            {
+                pilots = ev?.PilotChannels.Select(pc => new
+                {
+                    pilotId = pc.Pilot?.ID,
+                    pilotName = pc.Pilot?.Name,
+                    firstName = pc.Pilot?.FirstName,
+                    lastName = pc.Pilot?.LastName,
+                    discordId = pc.Pilot?.DiscordID,
+                    photoPath = pc.Pilot?.PhotoPath,
+                    channelId = pc.Channel?.ID,
+                    channelNumber = pc.Channel?.Number,
+                    band = pc.Channel?.Band.ToString(),
+                    frequency = pc.Channel?.Frequency
+                }).ToArray() ?? Array.Empty<object>()
+            });
+        }
+
+        public void Dispose()
         {
             Stop();
         }
@@ -460,6 +524,49 @@ namespace Webb
                 byte[] snapshot = SerializeState(full);
                 context.Response.ContentLength64 = snapshot.Length;
                 context.Response.OutputStream.Write(snapshot, 0, snapshot.Length);
+                context.Response.OutputStream.Close();
+                return;
+            }
+
+            if (path.StartsWith("/api/pilot/") && path.EndsWith("/photo"))
+            {
+                string idSegment = path.Substring("/api/pilot/".Length, path.Length - "/api/pilot/".Length - "/photo".Length);
+                if (Guid.TryParse(idSegment, out Guid pilotId))
+                {
+                    var pilot = eventManager?.Event?.PilotChannels
+                        .Select(pc => pc.Pilot)
+                        .FirstOrDefault(p => p?.ID == pilotId);
+
+                    if (pilot != null && !string.IsNullOrEmpty(pilot.PhotoPath))
+                    {
+                        string absolutePath = Path.IsPathRooted(pilot.PhotoPath)
+                            ? pilot.PhotoPath
+                            : Path.Combine(IOTools.WorkingDirectory?.FullName ?? "", pilot.PhotoPath);
+
+                        if (File.Exists(absolutePath))
+                        {
+                            context.Response.AppendHeader("Access-Control-Allow-Origin", "*");
+                            context.Response.ContentType = Path.GetExtension(absolutePath).ToLowerInvariant() switch
+                            {
+                                ".png" => "image/png",
+                                ".jpg" or ".jpeg" => "image/jpeg",
+                                ".gif" => "image/gif",
+                                ".webp" => "image/webp",
+                                ".mp4" => "video/mp4",
+                                ".wmv" => "video/x-ms-wmv",
+                                ".mkv" => "video/x-matroska",
+                                _ => "application/octet-stream"
+                            };
+                            byte[] photoBytes = File.ReadAllBytes(absolutePath);
+                            context.Response.ContentLength64 = photoBytes.Length;
+                            context.Response.OutputStream.Write(photoBytes, 0, photoBytes.Length);
+                            context.Response.OutputStream.Close();
+                            return;
+                        }
+                    }
+                }
+
+                context.Response.StatusCode = 404;
                 context.Response.OutputStream.Close();
                 return;
             }
